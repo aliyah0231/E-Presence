@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Presensi App - Dashboard</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="https://cdn.socket.io/4.7.4/socket.io.min.js"></script>
+</head>
+<body>
+  <nav class="navbar">
+    <div class="nav-brand">📋 Presensi App</div>
+    <div class="nav-right">
+      <span id="current-user"></span>
+      <button id="dark-toggle" class="btn-icon">🌙</button>
+      <button id="logout-btn" class="btn-secondary">Logout</button>
+    </div>
+  </nav>
+  <div class="container">
+    <div class="stats-row">
+      <div class="stat-card online-card">
+        <div class="stat-icon">🟢</div>
+        <div class="stat-info">
+          <span class="stat-label">Online</span>
+          <span id="online-count" class="stat-value">0</span>
+        </div>
+      </div>
+      <div class="stat-card offline-card">
+        <div class="stat-icon">🔴</div>
+        <div class="stat-info">
+          <span class="stat-label">Offline</span>
+          <span id="offline-count" class="stat-value">0</span>
+        </div>
+      </div>
+      <div class="stat-card total-card">
+        <div class="stat-icon">👥</div>
+        <div class="stat-info">
+          <span class="stat-label">Total User</span>
+          <span id="total-count" class="stat-value">0</span>
+        </div>
+      </div>
+    </div>
+    <div class="main-grid">
+      <div class="card">
+        <div class="card-header"><h2>Daftar User</h2></div>
+        <div class="card-body" id="user-list"><div class="loading">Memuat data...</div></div>
+      </div>
+      <div class="card">
+        <div class="card-header"><h2>Riwayat Aktivitas</h2></div>
+        <div class="card-body" id="activity-list"><div class="loading">Memuat data...</div></div>
+      </div>
+    </div>
+  </div>
+  <div id="toast-container"></div>
+  <script>
+    const token = localStorage.getItem('token');
+    const user = JSON.parse(localStorage.getItem('user') || '{}');
+    if (!token) { window.location.href = '/'; }
+    document.getElementById('current-user').textContent = '👋 ' + user.username;
+    const socket = io();
+    socket.emit('user-online', { userId: user.id, username: user.username });
+    async function apiFetch(url) {
+      const res = await fetch(url, { headers: { 'Authorization': 'Bearer ' + token } });
+      return res.json();
+    }
+    function renderUsers(allUsers, onlineSockets) {
+      const onlineIds = new Set(onlineSockets.map(s => s.userId));
+      const sorted = [...allUsers].sort((a, b) => {
+        if (a.is_online && !b.is_online) return -1;
+        if (!a.is_online && b.is_online) return 1;
+        return a.username.localeCompare(b.username);
+      });
+      document.getElementById('online-count').textContent = onlineSockets.length;
+      document.getElementById('offline-count').textContent = allUsers.length - onlineSockets.length;
+      document.getElementById('total-count').textContent = allUsers.length;
+      const list = document.getElementById('user-list');
+      list.innerHTML = '';
+      if (sorted.length === 0) { list.innerHTML = '<div class="empty-state">Belum ada user terdaftar</div>'; return; }
+      sorted.forEach(u => {
+        const isOnline = u.is_online;
+        const div = document.createElement('div');
+        div.className = 'user-item';
+        div.innerHTML = `
+          <div class="user-avatar ${isOnline ? 'online' : 'offline'}">${u.username.charAt(0).toUpperCase()}</div>
+          <div class="user-info">
+            <span class="user-name">${u.username} ${u.id === user.id ? '(Anda)' : ''}</span>
+            <span class="user-status ${isOnline ? 'online-text' : 'offline-text'}">${isOnline ? '🟢 Online' : '🔴 Offline'}</span>
+          </div>`;
+        list.appendChild(div);
+      });
+    }
+    function renderActivities(activities) {
+      const list = document.getElementById('activity-list');
+      list.innerHTML = '';
+      if (activities.length === 0) { list.innerHTML = '<div class="empty-state">Belum ada aktivitas</div>'; return; }
+      activities.forEach(a => {
+        const time = new Date(a.created_at).toLocaleString('id-ID');
+        const actionLabel = { 'login': '✅ Login', 'logout': '❌ Logout', 'register': '📝 Register' }[a.action] || a.action;
+        const div = document.createElement('div');
+        div.className = 'activity-item';
+        div.innerHTML = `<div class="activity-time">${time}</div><div class="activity-text"><strong>${a.username}</strong> ${actionLabel}</div>`;
+        list.appendChild(div);
+      });
+    }
+    function showToast(message, type) {
+      const container = document.getElementById('toast-container');
+      const toast = document.createElement('div');
+      toast.className = 'toast toast-' + type;
+      toast.innerHTML = message;
+      container.appendChild(toast);
+      setTimeout(() => { toast.classList.add('fade-out'); setTimeout(() => toast.remove(), 300); }, 4000);
+    }
+    async function loadInitialData() {
+      const [users, activities] = await Promise.all([
+        apiFetch('/api/users'), apiFetch('/api/activities?limit=50')
+      ]);
+      renderUsers(users, []);
+      renderActivities(activities);
+    }
+    loadInitialData();
+    socket.on('online-users', (onlineList) => {
+      apiFetch('/api/users').then(users => renderUsers(users, onlineList));
+    });
+    socket.on('notification', (data) => {
+      showToast((data.type === 'join' ? '🟢 ' : '🔴 ') + data.message, data.type);
+    });
+    socket.on('new-activity', (data) => {
+      const list = document.getElementById('activity-list');
+      const time = new Date(data.created_at).toLocaleString('id-ID');
+      const actionLabel = { 'login': '✅ Login', 'logout': '❌ Logout', 'register': '📝 Register' }[data.action] || data.action;
+      const div = document.createElement('div');
+      div.className = 'activity-item new';
+      div.innerHTML = `<div class="activity-time">${time}</div><div class="activity-text"><strong>${data.username}</strong> ${actionLabel}</div>`;
+      list.prepend(div);
+      while (list.children.length > 100) { list.lastChild.remove(); }
+      setTimeout(() => div.classList.remove('new'), 2000);
+    });
+    document.getElementById('logout-btn').addEventListener('click', () => {
+      socket.emit('user-offline', { userId: user.id, username: user.username });
+      localStorage.removeItem('token');
+      localStorage.removeItem('user');
+      window.location.href = '/';
+    });
+    const darkToggle = document.getElementById('dark-toggle');
+    if (localStorage.getItem('theme') === 'dark') {
+      document.body.classList.add('dark-mode');
+      darkToggle.textContent = '☀️';
+    }
+    darkToggle.addEventListener('click', () => {
+      document.body.classList.toggle('dark-mode');
+      darkToggle.textContent = document.body.classList.contains('dark-mode') ? '☀️' : '🌙';
+      localStorage.setItem('theme', document.body.classList.contains('dark-mode') ? 'dark' : 'light');
+    });
+  </script>
+</body>
+</html>
